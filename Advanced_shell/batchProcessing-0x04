@@ -1,72 +1,66 @@
 #!/bin/bash
 
-# List of Pokémon to retrieve (lowercase)
+# List of Pokémon to retrieve
 pokemon_list=("bulbasaur" "ivysaur" "venusaur" "charmander" "charmeleon")
 
-# Base API URL
+# API configuration
 api_base="https://pokeapi.co/api/v2/pokemon"
-
-# Maximum parallel processes
 max_parallel=3
+request_delay=1
 
-# Error log file
+# Error handling
 error_log="pokemon_errors.log"
-
-# Clear previous error log
 > "$error_log"
 
-# Function to fetch Pokémon data
+# Function to fetch and save Pokémon data
 fetch_pokemon() {
     local pokemon=$1
     local filename="${pokemon}.json"
     local max_retries=3
-    local retry_count=0
-    local success=0
 
-    while [ $retry_count -lt $max_retries ] && [ $success -eq 0 ]; do
-        response=$(curl -s -w "%{http_code}" "${api_base}/${pokemon}")
-        http_code=${response: -3}
-        body=${response:0:-3}
+    for ((i=1; i<=max_retries; i++)); do
+        if response=$(curl -s -w "%{http_code}" "${api_base}/${pokemon}" 2>/dev/null); then
+            http_code=${response: -3}
+            body=${response:0:-3}
 
-        if [ "$http_code" -eq 200 ]; then
-            echo "$body" > "$filename"
-            echo "  Successfully saved ${pokemon^} data to $filename"
-            success=1
-        else
-            retry_count=$((retry_count + 1))
-            if [ $retry_count -lt $max_retries ]; then
-                sleep 1 # Delay between retries
-            else
-                error_msg="[$(date +'%Y-%m-%d %H:%M:%S')] Failed to fetch ${pokemon} after $max_retries attempts (HTTP $http_code)"
-                echo "$error_msg" >> "$error_log"
-                echo "  $error_msg"
-                echo "{\"error\": \"$error_msg\"}" > "$filename"
+            if [ "$http_code" -eq 200 ]; then
+                echo "$body" > "$filename"
+                echo "  Success: ${pokemon^} saved to $filename"
+                return 0
             fi
         fi
+
+        if [ $i -lt $max_retries ]; then
+            sleep $request_delay
+        fi
     done
+
+    error_msg="[$(date +'%Y-%m-%d %H:%M:%S')] Failed to fetch ${pokemon} after ${max_retries} attempts"
+    echo "$error_msg" >> "$error_log"
+    echo "  Error: $error_msg"
+    echo "{\"error\": \"$error_msg\"}" > "$filename"
+    return 1
 }
 
-# Initialize variables
-declare -a pids
-current_parallel=0
+# Main execution
+echo "Starting parallel Pokémon data fetch (max $max_parallel concurrent requests)..."
 
-echo "Starting parallel Pokémon data fetch..."
-
-# Process Pokémon in parallel batches
+# Process all Pokémon in background
 for pokemon in "${pokemon_list[@]}"; do
-    if [ $current_parallel -ge $max_parallel ]; then
-        # Wait for one process to finish before starting another
-        wait -n
-        current_parallel=$((current_parallel - 1))
-    fi
+    while [ $(jobs -r | wc -l) -ge $max_parallel ]; do
+        sleep 0.1
+    done
 
     echo "Processing ${pokemon^}..."
     fetch_pokemon "$pokemon" &
-    pids+=($!)
-    current_parallel=$((current_parallel + 1))
 done
 
-# Wait for all remaining processes to complete
-wait "${pids[@]}"
+# Wait for all background jobs to complete
+wait
 
-echo -e "\nAll Pokémon data fetched. Error log saved to $error_log"
+# Clean up any remaining processes if needed
+for job in $(jobs -p); do
+    kill "$job" 2>/dev/null
+done
+
+echo -e "\nAll Pokémon data processed. Error log: $error_log"
