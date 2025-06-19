@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# List of Pokémon to retrieve (already in lowercase)
+# List of Pokémon to retrieve (lowercase)
 pokemon_list=("bulbasaur" "ivysaur" "venusaur" "charmander" "charmeleon")
 
 # Base API URL
@@ -9,32 +9,55 @@ api_base="https://pokeapi.co/api/v2/pokemon"
 # Delay between requests (in seconds)
 request_delay=1
 
+# Maximum retry attempts
+max_retries=3
+
+# Error log file
+error_log="pokemon_errors.log"
+
+# Clear previous error log
+> "$error_log"
+
 for pokemon in "${pokemon_list[@]}"; do
     filename="${pokemon}.json"
+    retry_count=0
+    success=0
     
-    echo "Fetching data for ${pokemon^}..."  # Capitalize first letter for display
-    
-    # Make the API request
-    response=$(curl -s -w "%{http_code}" "${api_base}/${pokemon}")
-    
-    # Extract status code and body
-    http_code=${response: -3}
-    body=${response:0:-3}
-    
-    if [ "$http_code" -eq 200 ]; then
-        # Save successful response
-        echo "$body" > "$filename"
-        echo "Saved ${pokemon^} data to $filename"
-    else
-        # Log error
-        echo "Error fetching ${pokemon^}: HTTP $http_code" >&2
-        echo "{\"error\": \"Failed to fetch ${pokemon}\", \"status\": $http_code}" > "$filename"
-    fi
-    
-    # Delay between requests unless it's the last one
+    echo "Processing ${pokemon^}..."
+
+    while [ $retry_count -lt $max_retries ] && [ $success -eq 0 ]; do
+        # Make the API request
+        response=$(curl -s -w "%{http_code}" "${api_base}/${pokemon}")
+        
+        # Extract status code and body
+        http_code=${response: -3}
+        body=${response:0:-3}
+
+        if [ "$http_code" -eq 200 ]; then
+            # Save successful response
+            echo "$body" > "$filename"
+            echo "  Successfully saved ${pokemon^} data to $filename"
+            success=1
+        else
+            retry_count=$((retry_count + 1))
+            if [ $retry_count -lt $max_retries ]; then
+                echo "  Attempt $retry_count failed (HTTP $http_code), retrying..."
+                sleep $request_delay
+            else
+                # Log final failure
+                error_msg="[$(date +'%Y-%m-%d %H:%M:%S')] Failed to fetch ${pokemon} after $max_retries attempts (HTTP $http_code)"
+                echo "$error_msg" >> "$error_log"
+                echo "  $error_msg"
+                # Create empty JSON file to maintain consistency
+                echo "{\"error\": \"$error_msg\"}" > "$filename"
+            fi
+        fi
+    done
+
+    # Delay between different Pokémon requests
     if [ "$pokemon" != "${pokemon_list[-1]}" ]; then
         sleep $request_delay
     fi
 done
 
-echo "Pokémon data retrieval complete."
+echo -e "\nProcessing complete. Error log saved to $error_log"
