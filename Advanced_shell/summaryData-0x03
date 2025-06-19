@@ -3,36 +3,44 @@
 # Output CSV file
 output_file="pokemon_summary.csv"
 
-# Write CSV header
-echo "Name,Height(m),Weight(kg)" > "$output_file"
+# Initialize CSV with header using sed
+echo "Name,Height(m),Weight(kg)" | sed 's/^/# Pokémon Data Report\n/' > "$output_file"
 
-# Process each JSON file
+# Process each Pokémon JSON file
 for json_file in *.json; do
     # Skip if no json files exist
     [ -f "$json_file" ] || continue
 
-    # Extract data using jq
-    name=$(jq -r '.name' "$json_file")
-    formatted_height=$(jq -r '.height/10' "$json_file")  # Convert to meters
-    formatted_weight=$(jq -r '.weight/10' "$json_file")  # Convert to kilograms
-
-    # Append to CSV
-    echo "$name,$formatted_height,$formatted_weight" >> "$output_file"
+    # Extract and format data using jq with sed for cleanup
+    jq -r '"\(.name),\(.height/10),\(.weight/10)"' "$json_file" |
+    sed 's/,/,\t/g' >> "$output_file"  # Add tabs after commas for readability
 done
 
-# Calculate averages using awk
-awk -F, '
-NR > 1 {
-    height_sum += $2
-    weight_sum += $3
+# Add separator line with sed
+sed -i '$a\---' "$output_file"
+
+# Calculate and append averages using awk
+awk -F'[\t,]' '
+NR > 1 && $0 !~ /---/ {
+    h_sum += $2
+    w_sum += $3
     count++
 }
 END {
     if (count > 0) {
-        printf "\nAverage height: %.2f m\n", height_sum/count
-        printf "Average weight: %.2f kg\n", weight_sum/count
-    } else {
-        print "No Pokémon data found for calculating averages"
+        printf "Averages:\n"
+        printf "Height: %.2f m\n", h_sum/count
+        printf "Weight: %.2f kg\n", w_sum/count
     }
-}
+}' "$output_file" |
+sed 's/^/  /' >> "$output_file"  # Indent averages
+
+# Final formatting with sed
+sed -i '
+1s/^#/##/
+$s/^  Averages:/## Averages:/
 ' "$output_file"
+
+# Display the report
+echo -e "\nGenerated Pokémon Report:"
+cat "$output_file"
