@@ -1,0 +1,72 @@
+#!/bin/bash
+
+# List of Pokémon to retrieve (lowercase)
+pokemon_list=("bulbasaur" "ivysaur" "venusaur" "charmander" "charmeleon")
+
+# Base API URL
+api_base="https://pokeapi.co/api/v2/pokemon"
+
+# Maximum parallel processes
+max_parallel=3
+
+# Error log file
+error_log="pokemon_errors.log"
+
+# Clear previous error log
+> "$error_log"
+
+# Function to fetch Pokémon data
+fetch_pokemon() {
+    local pokemon=$1
+    local filename="${pokemon}.json"
+    local max_retries=3
+    local retry_count=0
+    local success=0
+
+    while [ $retry_count -lt $max_retries ] && [ $success -eq 0 ]; do
+        response=$(curl -s -w "%{http_code}" "${api_base}/${pokemon}")
+        http_code=${response: -3}
+        body=${response:0:-3}
+
+        if [ "$http_code" -eq 200 ]; then
+            echo "$body" > "$filename"
+            echo "  Successfully saved ${pokemon^} data to $filename"
+            success=1
+        else
+            retry_count=$((retry_count + 1))
+            if [ $retry_count -lt $max_retries ]; then
+                sleep 1 # Delay between retries
+            else
+                error_msg="[$(date +'%Y-%m-%d %H:%M:%S')] Failed to fetch ${pokemon} after $max_retries attempts (HTTP $http_code)"
+                echo "$error_msg" >> "$error_log"
+                echo "  $error_msg"
+                echo "{\"error\": \"$error_msg\"}" > "$filename"
+            fi
+        fi
+    done
+}
+
+# Initialize variables
+declare -a pids
+current_parallel=0
+
+echo "Starting parallel Pokémon data fetch..."
+
+# Process Pokémon in parallel batches
+for pokemon in "${pokemon_list[@]}"; do
+    if [ $current_parallel -ge $max_parallel ]; then
+        # Wait for one process to finish before starting another
+        wait -n
+        current_parallel=$((current_parallel - 1))
+    fi
+
+    echo "Processing ${pokemon^}..."
+    fetch_pokemon "$pokemon" &
+    pids+=($!)
+    current_parallel=$((current_parallel + 1))
+done
+
+# Wait for all remaining processes to complete
+wait "${pids[@]}"
+
+echo -e "\nAll Pokémon data fetched. Error log saved to $error_log"
